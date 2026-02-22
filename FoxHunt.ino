@@ -4,17 +4,23 @@
  * Original Author: VE6BTC (IDE 1.6.0)
  * Updated: November 2020 by VA6MCP (IDE 1.8.13)
  * 2nd Update: February 2026 by 21M085 (IDE 2.3.7)
- * Further refinements to the code include improved variable naming, structured comments,
- * function documentation, and timing adjustments.
- * 3rd Update: Added serial menu configuration similar to SparkFun OpenScale.
+ *             Further refinements to the code include improved variable naming, structured comments,
+ *             function documentation, and timing adjustments.
+ * 3rd Update: Added serial menu configuration.
+ * 4th Update: Added timeouts to serial input functions to prevent blocking/hanging when connected to a computer.
+ *             This ensures the menu and input reading exit automatically if no complete input is provided within a reasonable time.
+ *             Also added small delays in loops to avoid busy-waiting and reduce CPU load.
+ * 5th Update: Inverted TX_PIN logic. Now HIGH on TX_PIN starts transmission, LOW stops it.
+ *             Updated comments to reflect normally open relay configuration.
+ * 6th Update: Updated hardware description to use 4N25 optocoupler instead of relay.
  *
  * Purpose:
  * This sketch enables an Arduino to transmit Morse code via a Baofeng UV-5R or similar radio
  * for amateur radio fox hunting activities. It generates audio tones for the radio's microphone
- * input and controls the PTT (Push-To-Talk) line using a relay.
+ * input and controls the PTT (Push-To-Talk) line using a 4N25 optocoupler.
  *
  * Hardware Connections:
- * - Pin 7 (TX_PIN): Controls the TX relay (normally closed configuration).
+ * - Pin 7 (TX_PIN): Controls the PTT via 4N25 optocoupler.
  * - Pin 5 (AUDIO_PIN): Outputs audio tones to the radio's microphone input.
  * - Pin 13: On-board LED for visualizing Morse code output (optional debugging).
  *
@@ -25,18 +31,16 @@
  * - Serial menu accessible by sending 'x' during rest period for configuration.
  *
  * Notes:
- * - Relay is normally closed: HIGH on TX_PIN opens the circuit (stops TX), LOW closes it (starts TX).
+ * - Optocoupler (4N25): HIGH on TX_PIN activates the opto (starts TX), LOW deactivates it (stops TX).
  * - Tone frequency is approximate due to square wave generation and harmonics.
  * - Morse timing follows standard conventions exactly: dit = 1 unit, dah = 3 units, inter-element = 1 unit,
  * inter-character = 3 units, inter-word = 7 units. This is achieved by appending '0' for inter-character
  * (adding 2 units via pause), and using "000" for word spaces (adding three pauses for 6 units extra).
  ********************************************************************************/
-
 #include <EEPROM.h>
 
-#define TX_PIN 7 // Pin controlling TX relay.
+#define TX_PIN 7 // Pin controlling PTT via optocoupler.
 #define AUDIO_PIN 5 // Pin for audio output to radio mic.
-
 #define EEPROM_MAGIC 0xABCD
 #define EEPROM_ADDR_MAGIC 0
 #define EEPROM_ADDR_TONE_HZ 2
@@ -45,6 +49,8 @@
 #define EEPROM_ADDR_LONG_TONE_MS 10
 #define EEPROM_ADDR_MESSAGE 14 // Max message length assumed 100 chars.
 #define MAX_MESSAGE_LEN 100
+#define MENU_TIMEOUT_MS 30000 // 30 seconds timeout for menu inactivity.
+#define INPUT_TIMEOUT_MS 10000 // 10 seconds timeout for reading input lines.
 
 // Configurable variables (loaded from EEPROM)
 int TONE_HZ = 600; // Tone frequency in Hz (actual slightly lower with harmonics).
@@ -119,8 +125,7 @@ void setup() {
   pinMode(TX_PIN, OUTPUT);
   pinMode(AUDIO_PIN, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT); // Use built-in LED constant for clarity.
-  digitalWrite(TX_PIN, HIGH); // Initial state: stop transmission (energize relay to open).
-
+  digitalWrite(TX_PIN, LOW); // Initial state: stop transmission (deactivate opto).
   Serial.begin(9600);
 
   // Load settings from EEPROM
@@ -135,7 +140,6 @@ void setup() {
     EEPROM.get(EEPROM_ADDR_LONG_TONE_MS, LONG_TONE_MS);
     message = readStringFromEEPROM(EEPROM_ADDR_MESSAGE);
   }
-
   morseCode = formMorse(message);
   notePeriod = 1000000L / TONE_HZ;
 
@@ -148,7 +152,7 @@ void setup() {
 }
 
 void loop() {
-  digitalWrite(TX_PIN, LOW); // Start transmission (de-energize relay to close).
+  digitalWrite(TX_PIN, HIGH); // Start transmission (activate opto).
 
   // Transmit long tone for direction finding.
   playTone(LONG_TONE_MS);
@@ -157,7 +161,7 @@ void loop() {
   // Transmit Morse code message.
   playCode(morseCode);
 
-  digitalWrite(TX_PIN, HIGH); // Stop transmission.
+  digitalWrite(TX_PIN, LOW); // Stop transmission.
 
   // Non-blocking rest with serial check
   long startRest = millis();
@@ -242,9 +246,8 @@ String formMorse(const String& input) {
 }
 
 // Serial Menu Functions
-
 void printMenu() {
-  Serial.println("\nMorse Code Transmitter");
+  Serial.println("\nMMorse Code Transmitter for Radio Fox Hunt");
   Serial.println("Version 1.0 by 21M085");
   Serial.println("System Configuration");
   Serial.println("Menu:");
@@ -261,6 +264,7 @@ void printMenu() {
 void menu() {
   Serial.println("Entering menu. Transmission paused.");
   printMenu();
+  long startMenu = millis();
   while (true) {
     if (Serial.available()) {
       char cmd = Serial.read();
@@ -268,7 +272,13 @@ void menu() {
       processCommand(cmd);
       if (cmd == 'x') break;
       printMenu();
+      startMenu = millis(); // Reset timeout on valid input
     }
+    if (millis() - startMenu > MENU_TIMEOUT_MS) {
+      Serial.println("\nMenu timeout. Exiting.");
+      break;
+    }
+    delay(10); // Small delay to avoid busy loop
   }
   Serial.println("Resuming transmission.");
 }
@@ -352,16 +362,20 @@ void processCommand(char cmd) {
 
 String readSerialLine() {
   String line = "";
-  while (true) {
+  long start = millis();
+  while (millis() - start < INPUT_TIMEOUT_MS) {
     if (Serial.available()) {
       char c = Serial.read();
       if (c == '\r' || c == '\n') {
-        break;
+        return line;
       }
       line += c;
+      start = millis(); // Reset timeout on each character received
     }
+    delay(10); // Small delay to avoid busy loop
   }
-  return line;
+  Serial.println("\nInput timeout.");
+  return "";
 }
 
 void writeStringToEEPROM(int addr, const String& str) {
@@ -391,7 +405,6 @@ void resetToDefaults() {
   message = "21M085 FOX 21M085 FOX";
   morseCode = formMorse(message);
   notePeriod = 1000000L / TONE_HZ;
-
   EEPROM.put(EEPROM_ADDR_MAGIC, EEPROM_MAGIC);
   EEPROM.put(EEPROM_ADDR_TONE_HZ, TONE_HZ);
   EEPROM.put(EEPROM_ADDR_DIT_MS, DIT_MS);
