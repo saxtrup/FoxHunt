@@ -6,7 +6,7 @@
  * 2nd Update: February 2026 by 21M085 (IDE 2.3.7)
  *             Further refinements to the code include improved variable naming, structured comments,
  *             function documentation, and timing adjustments.
- * 3rd Update: Added serial menu configuration.
+ * 3rd Update: Added serial menu configuration similar to SparkFun OpenScale.
  * 4th Update: Added timeouts to serial input functions to prevent blocking/hanging when connected to a computer.
  *             This ensures the menu and input reading exit automatically if no complete input is provided within a reasonable time.
  *             Also added small delays in loops to avoid busy-waiting and reduce CPU load.
@@ -247,9 +247,8 @@ String formMorse(const String& input) {
 
 // Serial Menu Functions
 void printMenu() {
-  Serial.println("\nMMorse Code Transmitter for Radio Fox Hunt");
-  Serial.println("Version 1.0 by 21M085");
-  Serial.println("System Configuration");
+  Serial.println("\nMorse Code Transmitter for Radio Fox Hunt");
+  Serial.println("System Configuration (Version 1.0 by 21M085)");
   Serial.println("Menu:");
   Serial.println("1 - Set message");
   Serial.println("2 - Set tone frequency (Hz)");
